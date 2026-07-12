@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YouTube Transcript Fetcher</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #1c2024;
+    --muted: #6b7280;
+    --accent: #cc0000;
+    --accent-hover: #a80000;
+    --border: #e2e5e9;
+    --chip: #eef1f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .container { max-width: 860px; margin: 0 auto; padding: 48px 20px 80px; }
+  header { text-align: center; margin-bottom: 32px; }
+  header h1 { font-size: 28px; margin: 0 0 8px; }
+  header h1 .yt { color: var(--accent); }
+  header p { color: var(--muted); margin: 0; font-size: 15px; }
+
+  .search-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    gap: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .search-card input {
+    flex: 1;
+    font-size: 15px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    min-width: 0;
+  }
+  .search-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(204,0,0,.12); }
+  .search-card button {
+    font-size: 15px;
+    font-weight: 600;
+    padding: 12px 22px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .search-card button:hover:not(:disabled) { background: var(--accent-hover); }
+  .search-card button:disabled { opacity: .6; cursor: default; }
+
+  #status { margin-top: 20px; text-align: center; font-size: 15px; color: var(--muted); }
+  #status.error {
+    color: #b42318;
+    background: #fef3f2;
+    border: 1px solid #fecdca;
+    border-radius: 8px;
+    padding: 12px 16px;
+    text-align: left;
+  }
+  .spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    vertical-align: -3px;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #results { margin-top: 28px; display: none; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .tab {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--card);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .tab .badge {
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--chip);
+    border-radius: 999px;
+    padding: 2px 7px;
+    margin-left: 6px;
+  }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tab.active .badge { background: rgba(255,255,255,.25); color: #fff; }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+    overflow: hidden;
+  }
+  .panel-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: #fafbfc;
+    flex-wrap: wrap;
+  }
+  .panel-toolbar .meta { font-size: 13px; color: var(--muted); margin-right: auto; }
+  .panel-toolbar button {
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--card);
+    cursor: pointer;
+  }
+  .panel-toolbar button:hover { border-color: var(--muted); }
+  .panel-toolbar label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
+  .transcript {
+    max-height: 480px;
+    overflow-y: auto;
+    padding: 8px 16px 16px;
+  }
+  .line { display: flex; gap: 14px; padding: 6px 0; font-size: 14.5px; line-height: 1.5; }
+  .line + .line { border-top: 1px solid #f1f3f5; }
+  .line .time {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    font-size: 13px;
+    padding-top: 2px;
+    user-select: none;
+  }
+  body.hide-times .line .time { display: none; }
+  .track-error { padding: 20px 16px; color: #b42318; font-size: 14px; }
+
+  footer { margin-top: 40px; text-align: center; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1><span class="yt">▶</span> YouTube Transcript Fetcher</h1>
+    <p>Paste a YouTube video link and get every available subtitle track.</p>
+  </header>
+
+  <form class="search-card" id="form">
+    <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" spellcheck="false">
+    <button id="go" type="submit">Get Transcripts</button>
+  </form>
+
+  <div id="status"></div>
+
+  <div id="results">
+    <div class="tabs" id="tabs"></div>
+    <div class="panel">
+      <div class="panel-toolbar">
+        <span class="meta" id="meta"></span>
+        <label><input type="checkbox" id="toggle-times" checked> Timestamps</label>
+        <button id="copy">Copy text</button>
+        <button id="dl-txt">Download .txt</button>
+        <button id="dl-srt">Download .srt</button>
+      </div>
+      <div class="transcript" id="transcript"></div>
+    </div>
+  </div>
+
+  <footer>Works with youtube.com/watch, youtu.be, Shorts and live links.</footer>
+</div>
+
+<script>
+const form = document.getElementById('form');
+const urlInput = document.getElementById('url');
+const goBtn = document.getElementById('go');
+const statusEl = document.getElementById('status');
+const resultsEl = document.getElementById('results');
+const tabsEl = document.getElementById('tabs');
+const metaEl = document.getElementById('meta');
+const transcriptEl = document.getElementById('transcript');
+
+let data = null;      // last API response
+let current = 0;      // selected track index
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = urlInput.value.trim();
+  if (!url) { urlInput.focus(); return; }
+
+  goBtn.disabled = true;
+  resultsEl.style.display = 'none';
+  statusEl.className = '';
+  statusEl.innerHTML = '<span class="spinner"></span>Fetching transcripts…';
+
+  try {
+    const res = await fetch('/api/transcripts?url=' + encodeURIComponent(url));
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'Request failed.');
+    data = body;
+    statusEl.textContent = '';
+    renderTabs();
+    selectTrack(0);
+    resultsEl.style.display = 'block';
+  } catch (err) {
+    statusEl.className = 'error';
+    statusEl.textContent = err.message;
+  } finally {
+    goBtn.disabled = false;
+  }
+});
+
+function renderTabs() {
+  tabsEl.innerHTML = '';
+  data.transcripts.forEach((t, i) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'tab';
+    tab.innerHTML = escapeHtml(t.language) +
+      '<span class="badge">' + (t.is_generated ? 'auto' : 'manual') + '</span>';
+    tab.addEventListener('click', () => selectTrack(i));
+    tabsEl.appendChild(tab);
+  });
+}
+
+function selectTrack(i) {
+  current = i;
+  [...tabsEl.children].forEach((el, j) => el.classList.toggle('active', j === i));
+  const t = data.transcripts[i];
+
+  transcriptEl.innerHTML = '';
+  if (t.error || !t.entries) {
+    metaEl.textContent = t.language + ' — unavailable';
+    transcriptEl.innerHTML = '<div class="track-error">' + escapeHtml(t.error || 'Track unavailable.') + '</div>';
+    return;
+  }
+
+  metaEl.textContent = t.language + ' (' + t.language_code + ') · ' +
+    t.entries.length + ' lines · ' + (t.is_generated ? 'auto-generated' : 'manually created');
+
+  const frag = document.createDocumentFragment();
+  for (const e of t.entries) {
+    const line = document.createElement('div');
+    line.className = 'line';
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = fmtTime(e.start);
+    const text = document.createElement('span');
+    text.textContent = e.text;
+    line.append(time, text);
+    frag.appendChild(line);
+  }
+  transcriptEl.appendChild(frag);
+  transcriptEl.scrollTop = 0;
+}
+
+document.getElementById('toggle-times').addEventListener('change', (e) => {
+  document.body.classList.toggle('hide-times', !e.target.checked);
+});
+
+document.getElementById('copy').addEventListener('click', async (e) => {
+  const t = data.transcripts[current];
+  if (!t.entries) return;
+  const showTimes = document.getElementById('toggle-times').checked;
+  const text = t.entries
+    .map(en => showTimes ? '[' + fmtTime(en.start) + '] ' + en.text : en.text)
+    .join('\n');
+  await navigator.clipboard.writeText(text);
+  const btn = e.target;
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = 'Copy text'; }, 1500);
+});
+
+document.getElementById('dl-txt').addEventListener('click', () => {
+  const t = data.transcripts[current];
+  if (!t.entries) return;
+  const text = t.entries.map(en => '[' + fmtTime(en.start) + '] ' + en.text).join('\n');
+  download(text, filename(t, 'txt'), 'text/plain');
+});
+
+document.getElementById('dl-srt').addEventListener('click', () => {
+  const t = data.transcripts[current];
+  if (!t.entries) return;
+  const srt = t.entries.map((en, i) =>
+    (i + 1) + '\n' + srtTime(en.start) + ' --> ' + srtTime(en.start + en.duration) + '\n' + en.text + '\n'
+  ).join('\n');
+  download(srt, filename(t, 'srt'), 'application/x-subrip');
+});
+
+function filename(t, ext) {
+  return data.video_id + '.' + t.language_code + '.' + ext;
+}
+
+function download(content, name, mime) {
+  const blob = new Blob([content], { type: mime + ';charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function fmtTime(sec) {
+  const s = Math.floor(sec);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const mm = String(m).padStart(2, '0'), rr = String(r).padStart(2, '0');
+  return h > 0 ? h + ':' + mm + ':' + rr : m + ':' + rr;
+}
+
+function srtTime(sec) {
+  const ms = Math.round(sec * 1000);
+  const h = Math.floor(ms / 3600000), m = Math.floor(ms % 3600000 / 60000),
+        s = Math.floor(ms % 60000 / 1000), r = ms % 1000;
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' +
+         String(s).padStart(2, '0') + ',' + String(r).padStart(3, '0');
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>
