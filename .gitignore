@@ -1,5 +1,6 @@
 .venv/
+work/
 __pycache__/
-*.pyc
-.claude/
+*.py[cod]
+*_transcript.txt
 .DS_Store
