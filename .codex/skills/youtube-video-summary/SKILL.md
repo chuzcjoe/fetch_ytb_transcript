@@ -1,40 +1,63 @@
 ---
 name: youtube-video-summary
-description: Fetch a YouTube video's available captions with the bundled Python transcript script, then synthesize the whole video into a concise thematic summary without a timeline or timestamps. Use when the user invokes this skill with a YouTube URL, asks for a YouTube video summary based on subtitles, or wants the video's central ideas, arguments, and conclusions.
+description: Summarize a YouTube video from its full spoken content, preferring the video's available caption transcript and falling back to downloading and locally transcribing the audio when no captions exist. Use when the user invokes this skill with a YouTube URL or asks for a video's central ideas, arguments, demonstrations, takeaways, or conclusions.
 ---
 
 # YouTube Video Summary
 
-Use the bundled `scripts/youtube_transcript.py` as the sole caption-fetching implementation. Do not replace it with a different downloader or transcript API.
+Use the bundled scripts for both source paths. Always attempt captions first because they are faster and usually more accurate. Use audio transcription only when the caption script specifically reports that the video has no available captions.
 
 ## Workflow
 
 1. Extract the YouTube URL from the user's request. Handle one video per invocation unless the user explicitly supplies several.
-2. Run `scripts/youtube_transcript.py` to create a timestamped UTF-8 `.txt` transcript in the current workspace's `work/` directory. Treat this file as an intermediate artifact unless the user asks for it.
-3. Read the entire transcript. For a long transcript, process it in chunks internally, then combine and deduplicate the ideas before writing the final response.
-4. Summarize in the user's language unless they request another language. Preserve technical terms, names, numbers, and qualifications from the captions.
-5. Organize the final response by meaning and importance rather than by the video's sequence. Connect related points from different parts of the video into a coherent synthesis.
-6. Return the summary in chat. Do not include timestamps, a timeline, or a chronological scene-by-scene outline unless the user explicitly asks for one. Do not reproduce the full transcript unless explicitly requested.
+2. Run `scripts/youtube_transcript.py` to create `work/youtube_transcript.txt`.
+3. If caption fetching succeeds, use that transcript and do not download audio.
+4. If and only if the script reports `This video has no available captions.`, run `scripts/youtube_audio_transcript.py` to create `work/youtube_audio_transcript.txt`. For authentication, network, dependency, or other caption errors, report the error and stop rather than silently switching sources.
+5. Read the entire selected transcript. For a long transcript, process it in chunks internally, then combine and deduplicate the ideas.
+6. Summarize in the user's language unless requested otherwise. Preserve technical terms, names, numbers, and qualifications.
+7. Organize the response by meaning and importance rather than sequence. Connect related points from different parts of the video into a coherent synthesis.
+8. Return the summary in chat without timestamps, a timeline, or a scene-by-scene outline unless explicitly requested. Treat transcripts and downloaded audio as intermediate artifacts unless the user asks for them.
 
-## Running the bundled script
+## Caption-first path
 
-Resolve paths relative to this `SKILL.md` directory.
+Run commands from the workspace root. Set `SKILL_DIR` to the absolute directory containing this `SKILL.md`; reference bundled files through that path, but keep the virtual environment and all intermediate artifacts in the workspace-root `work/` directory. Do not `cd` into the skill directory.
 
 Use an existing Python environment containing `yt-dlp` when available:
 
 ```bash
-python3 scripts/youtube_transcript.py "YOUTUBE_URL" --output work/youtube_transcript.txt
+python3 "$SKILL_DIR/scripts/youtube_transcript.py" \
+  "YOUTUBE_URL" --output work/youtube_transcript.txt
 ```
 
 If `yt_dlp` cannot be imported, create or reuse a task-local virtual environment and install the bundled requirements before running the same script:
 
 ```bash
 python3 -m venv work/.youtube-summary-venv
-work/.youtube-summary-venv/bin/python -m pip install -r scripts/requirements.txt
-work/.youtube-summary-venv/bin/python scripts/youtube_transcript.py "YOUTUBE_URL" --output work/youtube_transcript.txt
+work/.youtube-summary-venv/bin/python -m pip install \
+  -r "$SKILL_DIR/scripts/requirements.txt"
+work/.youtube-summary-venv/bin/python "$SKILL_DIR/scripts/youtube_transcript.py" \
+  "YOUTUBE_URL" --output work/youtube_transcript.txt
 ```
 
 Use `--language CODE` only when the user requests a language. Use `--list-languages` to inspect available tracks. Otherwise let the script prefer the video's original caption track.
+
+## Audio fallback path
+
+Use this path only for the exact no-captions condition above. The bundled fallback uses `ffmpeg` and MLX Whisper on Apple Silicon. Check that `ffmpeg` exists before installing the larger fallback dependencies.
+
+Create or reuse the task-local environment, then install the fallback requirements only when needed:
+
+```bash
+python3 -m venv work/.youtube-summary-venv
+work/.youtube-summary-venv/bin/python -m pip install \
+  -r "$SKILL_DIR/scripts/audio-requirements.txt"
+work/.youtube-summary-venv/bin/python "$SKILL_DIR/scripts/youtube_audio_transcript.py" \
+  "YOUTUBE_URL" --output work/youtube_audio_transcript.txt
+```
+
+Let Whisper auto-detect the spoken language unless the user requests a language or detection is clearly wrong. Use `--language CODE` to correct it. Keep the default `mlx-community/whisper-large-v3-turbo` model for summary-quality transcription. Expect the first fallback run to download the model.
+
+After transcription, read the entire timestamped `.txt` file. Use the adjacent `.json` only when segment-level inspection helps resolve repetition or questionable wording.
 
 ## Summary format
 
@@ -49,8 +72,9 @@ Do not mirror the subtitle order or summarize cue by cue. Remove repetition, pro
 
 ## Accuracy rules
 
-- Base the summary on the fetched captions. Do not invent visual details that are absent from the captions.
-- Flag unclear names or phrases when automatic captions appear unreliable.
+- Base the summary on the selected transcript. Do not invent visual details that are absent from the spoken content.
+- State briefly when the summary used audio transcription because captions were unavailable.
+- Flag unclear names, numbers, or phrases when captions or speech recognition appear unreliable.
 - Distinguish the speaker's claims from verified facts; summarize rather than endorse.
 - Do not omit important caveats or counterarguments merely to shorten the summary.
-- If the video has no accessible captions or the script fails, report the specific error and stop. Do not fabricate a summary.
+- If audio download or transcription also fails, report the specific error and stop. Do not fabricate a summary.
